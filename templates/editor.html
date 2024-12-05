@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center">
+            <div class="input-group" style="max-width: 500px;">
+                <span class="input-group-text">
+                    <i class="bi bi-file-earmark-text"></i>
+                </span>
+                <input type="text" id="filename" class="form-control" 
+                       value="{{ filename if filename else '' }}" 
+                       placeholder="Enter filename (optional)">
+                <span class="input-group-text">.md</span>
+            </div>
+            <div class="btn-group">
+                <button id="save-btn" class="btn btn-primary">
+                    <i class="bi bi-save"></i> Save
+                </button>
+                <button id="copy-btn" class="btn btn-outline-secondary">
+                    <i class="bi bi-clipboard"></i> Copy
+                </button>
+                <a href="/" class="btn btn-outline-secondary">
+                    <i class="bi bi-x-lg"></i> Cancel
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row editor-container">
+    <div class="col-6">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="text-muted">Editor</span>
+            <div class="btn-group btn-group-sm">
+                <button id="fullscreen-editor" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrows-fullscreen"></i>
+                </button>
+            </div>
+        </div>
+        <textarea id="editor" class="form-control" spellcheck="false">{{ content if content else '' }}</textarea>
+    </div>
+    <div class="col-6">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="text-muted">Preview</span>
+            <div class="btn-group btn-group-sm">
+                <button id="fullscreen-preview" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrows-fullscreen"></i>
+                </button>
+            </div>
+        </div>
+        <div id="preview" class="border rounded">
+            <div class="preview-content"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Fullscreen containers -->
+<div id="fullscreen-editor-container" class="position-fixed top-0 start-0 w-100 h-100 bg-body" style="display: none; z-index: 1050;">
+    <div class="d-flex flex-column h-100 p-3">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="text-muted">Editor (Fullscreen)</span>
+            <button class="btn btn-outline-secondary btn-sm exit-fullscreen">
+                <i class="bi bi-fullscreen-exit"></i>
+            </button>
+        </div>
+        <textarea class="form-control flex-grow-1"></textarea>
+    </div>
+</div>
+
+<div id="fullscreen-preview-container" class="position-fixed top-0 start-0 w-100 h-100 bg-body" style="display: none; z-index: 1050;">
+    <div class="d-flex flex-column h-100 p-3">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="text-muted">Preview (Fullscreen)</span>
+            <button class="btn btn-outline-secondary btn-sm exit-fullscreen">
+                <i class="bi bi-fullscreen-exit"></i>
+            </button>
+        </div>
+        <div class="preview-content flex-grow-1 border rounded p-3 overflow-auto"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const editor = document.getElementById('editor');
+    const preview = document.querySelector('.preview-content');
+    const saveBtn = document.getElementById('save-btn');
+    const filenameInput = document.getElementById('filename');
+    const copyBtn = document.getElementById('copy-btn');
+    
+    let lastContent = '';
+    let saveTimeout;
+
+    function updatePreview() {
+        const content = editor.value;
+        if (content === lastContent) return;
+        
+        lastContent = content;
+        fetch('/preview', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                content: content
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            preview.innerHTML = data.html;
+            document.querySelectorAll('#fullscreen-preview-container .preview-content')
+                .forEach(el => el.innerHTML = data.html);
+        });
+    }
+
+    function saveDocument() {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Saving...';
+        
+        fetch('/save', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                filename: filenameInput.value,
+                content: editor.value
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Document saved successfully!');
+                if (filenameInput.value !== data.filename) {
+                    filenameInput.value = data.filename;
+                }
+            }
+        })
+        .catch(() => {
+            showToast('Error saving document', 'danger');
+        })
+        .finally(() => {
+            saveBtn.disabled = false;
+            saveBtn.innerHTML = '<i class="bi bi-save"></i> Save';
+        });
+    }
+
+    // Event listeners
+    editor.addEventListener('input', () => {
+        clearTimeout(saveTimeout);
+        saveTimeout = setTimeout(updatePreview, 300);
+        
+        // Auto-save draft
+        localStorage.setItem('markdown_draft', editor.value);
+    });
+
+    saveBtn.addEventListener('click', saveDocument);
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', function(e) {
+        if (e.ctrlKey || e.metaKey) {
+            if (e.key === 's') {
+                e.preventDefault();
+                saveDocument();
+            }
+        }
+    });
+
+    // Copy button
+    copyBtn.addEventListener('click', function() {
+        navigator.clipboard.writeText(editor.value).then(() => {
+            showToast('Content copied to clipboard!');
+            this.innerHTML = '<i class="bi bi-check-lg"></i> Copied!';
+            setTimeout(() => {
+                this.innerHTML = '<i class="bi bi-clipboard"></i> Copy';
+            }, 2000);
+        });
+    });
+
+    // Fullscreen handling
+    function setupFullscreen(editorMode = true) {
+        const container = document.getElementById(
+            editorMode ? 'fullscreen-editor-container' : 'fullscreen-preview-container'
+        );
+        const textarea = editorMode ? container.querySelector('textarea') : null;
+        const button = document.getElementById(
+            editorMode ? 'fullscreen-editor' : 'fullscreen-preview'
+        );
+        
+        button.addEventListener('click', () => {
+            container.style.display = 'block';
+            if (editorMode) {
+                textarea.value = editor.value;
+                textarea.focus();
+            }
+        });
+
+        container.querySelector('.exit-fullscreen').addEventListener('click', () => {
+            container.style.display = 'none';
+            if (editorMode && textarea.value !== editor.value) {
+                editor.value = textarea.value;
+                updatePreview();
+            }
+        });
+
+        if (editorMode) {
+            textarea.addEventListener('input', () => {
+                editor.value = textarea.value;
+                updatePreview();
+            });
+        }
+    }
+
+    setupFullscreen(true);
+    setupFullscreen(false);
+
+    // Initial preview
+    updatePreview();
+
+    // Load draft if exists and no content is provided
+    if (!editor.value && localStorage.getItem('markdown_draft')) {
+        editor.value = localStorage.getItem('markdown_draft');
+        updatePreview();
+    }
+});
+</script>
+{% endblock %} 
